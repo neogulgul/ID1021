@@ -1,0 +1,147 @@
+\documentclass[a4paper, 11pt]{article}
+
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[utf8]{inputenc}
+\usepackage{minted}
+
+\begin{document}
+
+\title{
+	\textbf{A Calculator in C}
+}
+\author{Neo Gullberg}
+\date{Fall 2024}
+\maketitle
+
+\section{Introduction}
+	In this assignment I was tasked with implementing a calculator which uses \textit{reverse Polish notation} to carry out its calculations.
+	All from scratch in the C programming language, of course.
+	This type of calculator is quite simple to implement with the help of a stack, which meant I had to implement a stack as well.
+
+\section{What Is a Stack?}
+	A stack operates on the \textit{last in, first out} (LIFO) principle, which means the most newly added element is the first one to be removed.
+	There are two basic operations which modify a stack: \textit{push} and \textit{pop}.
+	A push operation appends an element to the top of a stack, whilst a pop operation removes the top most element and returns it to the user.
+	But what should be returned by a pop operation if the stack is empty?
+	And in a language like C, where the programmer is in charge of memory management,
+	what should happen if a push operation tries to append an element outside the allocated memory of the stack?
+	These are important questions one must ask themselves when implementing a stack.
+	\par
+	What I ended up doing for the former was creating a data structure that could hold both a return value and a valid flag, the implementation of which can be seen below.
+	\begin{minted}{c}
+typedef struct
+{
+	int value;
+	bool valid;
+} pop_result;
+	\end{minted}
+	If a pop operation is performed when the stack is empty the valid flag is set to false and the return value is set to an arbitrary default.
+	In all other cases, when the stack is not empty, the valid flag will be set to true and the return value will be the element at the top of the stack.
+	This however means the user has to keep track of whether or not the pop operation is valid or not, but I think that is a valid sacrifice for avoiding undefined behaviour.
+	\par
+	When it comes to the latter, it depends on whether or not the stack in question is static or dynamic.
+	A static stack has its size allocated once at creation, after that the size never changes.
+	In comparison, a dynamic stack can change size, either by expanding or shrinking, depending on the requirements of the user.
+	In a dynamic stack, if an element is pushed when the stack is already full, we could just allocate more memory so that the new element fits.
+	However, this does not work on a static stack.
+
+\section {Push Implementation}
+	Under normal circumstances, i.e. when not pushing out of bounds, pushing to a stack, no matter if it is static or dynamic, works the exact same way.
+	Therefore, the interesting part is how to handle an out of bounds push.
+	\par
+	What I ended up doing in my implementation for the static case was discarding the element at the bottom by
+	moving all elements above one step down, and then pushing the new element.
+	This means we never push out of the stack bounds, at the cost of losing the oldest element located at the bottom of the stack.
+	My implementation of the push operation to a static stack looked roughly like the one seen below.
+	\begin{minted}{c}
+void stack_static_push(stack_static *stack, int value)
+{
+	bool out_of_bounds = stack->top == stack->size;
+	if (out_of_bounds)
+	{
+		unsigned lastIndex = stack->size - 1;
+		for (int i = 0; i < lastIndex; i++)
+		{
+			stack->array[i] = stack->array[i + 1];
+		}
+		stack->top = lastIndex;
+	}
+	stack->array[stack->top++] = value;
+}
+	\end{minted}
+	The implementation of pushing to a dynamic stack is a bit more intersting.
+	What we have to consider is, by how much do we actually want to increase the stack size by?
+	Internally our stack is represented by an array.
+	This means, each time we have to increase the size of the stack, we have to:
+	allocate memory for a new array, copy over the elements of the old array to the new one, and then finally push the element we wanted pushed.
+	If we were to increase the size by a constant value each time, that would not scale well with different sizes of the stack and it would quickly hurt performance.
+	If a user only needed a stack of size 10, but we allocated memory for 1.000.000 elements, that would waste memory.
+	One the flip side, if a user wanted to push 1.000.000 elements to their stack already containing 1.000.000 elements,
+	and our program only allocated space for 10 new elements each expansion... that would no doubt waste some precious time.
+	What I chose to do instead was multiply the size by 2.
+	This means the size grows exponentially which in this case works out quite well.
+	The more elements in the stack, the more elements untill the next resize.
+	This scales well no matter the size of the stack.
+	My implementation of the push operation to a dynamic stack looked roughly like the one seen below.
+	\begin{minted}{c}
+void stack_dynamic_push(stack_dynamic *stack, int value)
+{
+	bool out_of_bounds = stack->top == stack->size;
+	if (out_of_bounds)
+	{
+		unsigned newSize = stack->size * 2;
+		int *expanded = (int *)malloc(newSize * sizeof(int));
+		for (unsigned i = 0; i < stack->size; i++)
+		{
+			expanded[i] = stack->array[i];
+		}
+		free(stack->array);
+		stack->array = expanded;
+		stack->size  = newSize;
+	}
+	stack->array[stack->top++] = value;
+}
+	\end{minted}
+
+\section {Pop Implementation}
+	The dynamic pop implementation builds upon the static pop implementation,
+	and everything that is carried over has already been previously explained in the \textbf{What Is a Stack?} section.
+	However, what is interesting here is again the case of the dynamic stack.
+	Namely, under what condition should it shrink? And by how much?
+	\par
+	As we have already gone over, it would be foolish to decrease the size by a constant value.
+	Therefore, I chose to divide the size instead, following the same reasoning as to why we multipled the size when expanding the stack.
+	I chose to shrink it to half its size (the inverse of doubling, which we do when expanding) to keep a consistent path for the stack to grow and shrink along.
+	\par
+	Now for the condition.
+	If we naively specify that the amount of elements in the stack only has to be less than half its allocated size for it to shrink,
+	then we run into a problem at the point where the stack is only one push or pop away from either expanding or shrinking.
+	To counteract this scenario I instead set the condition to be that the number of elements in the stack has to be \(\frac{1}{4}\) of its allocated size.
+	This leaves ample room for the user to both push and pop after any recent change in stack size.
+
+\section {Static vs. Dynamic}
+	Before deciding on what type of stack to use for the calculator, I wanted to compare the pros and cons of both.
+	During creation, the static stack may be considered slighly more work for the programmer since the size has to be specified directly,
+	whilst the dynamic version hides that in the implementation.
+	The static stack might also remove old elements to make room for new ones, where the dynamic stack would otherwise adapt to the circumstances by allocating more memory.
+	For our intents and purposes, we do not know how many elements the theoretical users of our calculator would want to store in the stack.
+	It would no doubt be a pain to try and figure out an optimal constant size for our stack, since depending on the user it would most likely either be too much, or not enough.
+	It would also not be good for users to receive incorrect results due only to a value having being lost to make room for new ones.
+	Therfore, since it puts less restrictions on our theoretical users and less pressure on our theoretical maintainers, I chose to go with a dynamic stack over a static one.
+
+\section {The Calculator}
+	Now that we have all the pieces in place, we can finally implement our calculator.
+	As mentioned in the introduction, this calculator uses \textit{reverse Polish notation} to calculate mathematical expressions.
+	This uses a stack to store operands (numbers), and whenever an operator (+, -, etc.) is specified, the two top most elements are popped and operated on,
+	with the result being pushed to the stack.
+	The nice thing about this is that it removes the need for any parentheses.
+	Now, to answer the \textit{The Answer to the Ultimate Question of Life, the Universe, and Everything} I inputted the following sequence into the calculator that I had created:
+	\texttt{4 2 3 * 4 + 4 * + 2 -}\\
+	The result I got was 42.
+	Thankfully my computer did not take 7.5 million years to calculate it.
+
+\section {Source code}
+	If anyone is interested, the source code for this project can be found over at: \url{https://github.com/neogulgul/ID1021/tree/main/HP35/program}
+
+\end{document}

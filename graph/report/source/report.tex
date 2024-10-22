@@ -1,0 +1,211 @@
+\documentclass[a4paper, 11pt]{article}
+
+\usepackage{adjustbox}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[utf8]{inputenc}
+\usepackage{minted}
+
+\begin{document}
+
+\title{
+	\textbf{Graphs in C}
+}
+\author{Neo Gullberg}
+\date{Fall 2024}
+\maketitle
+
+\section{Introduction}
+	In this assignment my task was to implement functionality for working with graphs in the C programming language.
+	Graphs are built up of a set of \textit{nodes}, where each node contains a set of connections to other nodes.
+	The connections are called \textit{edges}.
+	Through this network of connections, one can find paths between two nodes that are not directly connected.
+	However, this may not always be the case, since a connection does not have to go both ways.
+
+\section{Swedish Railroad Network}
+	A realistic use case for graphs appears in the form of a railroad network.
+	This time we will specifically target a subset of Swedens railroad.
+	The data was supplied to us in the form of a CSV (comma-separated values) file.
+	We tackled how to parse files like this in the last assignment, so I will avoid going into too much detail here.
+	Each line contained two city names and the time (in minutes) it takes to travel between them by train.
+	We want to construct a graph where each city is represented by an individual node,
+	and immediate connections between cities are represented by edges between their corresponding nodes.
+	Of course railroad tracks can be used by trains to travel both ways,
+	so when we add a connection from A to B we also have to add connection from B to A.
+	In order words, each connection in our graph will be bidirectional.
+
+\section{Representing the Graph}
+	I chose to use a hashmap to represent our graph since all our nodes will be represented by strings with the names of the cities.
+	Hashmaps are a great way of quickly getting the value we want via a certain hashed key, and thankfully strings are quite easy to hash.
+	The value for each key will be the set of immediate connections to that city.
+	Similar to parsing of the CSV file, I will not go into too much detail about my hashmap implementation since that was explained in the last assignment.
+	However, I will mention that I chose to implement the hashmap with a bucket approach instead of open addressing,
+	mostly since I though it was easier.
+	The modulo value I chose was 100, which corresponds to 100 buckets.
+	There where 3 collisions in total, each in a separate bucket, but that should not impact performance too much.
+	I think it has a good balance between speed and memory usage (altough memory is not really of concern for such a small dataset, but I digress).
+	I used the following struct to represent a city:
+	\begin{minted}[tabsize=4]{c}
+typedef struct
+{
+	char *name;
+	destination_t destinations[MAX_DESTINATIONS];
+	size_t destination_count;
+} city_t;
+	\end{minted}
+	I chose to call immediate connections "destinations".
+	A city has a \texttt{name} and a set of \texttt{destinations}, as well as the number of destinations (\texttt{destination\_count}).
+	To represent a destination I had this:
+	\begin{minted}[tabsize=4]{c}
+typedef struct
+{
+	char *name;
+	int minutes;
+} destination_t;
+	\end{minted}
+	A destination contains the \texttt{name} of another city, and the time in \texttt{minutes} it takes to get there via train.
+
+\section{Fastest Path Between Two Cities}
+	To get from one point to another is trivial, and can theoretically be done in an infinite number of ways.
+	However, finding the shortest path, or in our case fastest path, between said points is far more complex.
+	Our first attempt at tackling this problem will basically rely on good ol' brute force.
+	We will test ALL possible paths that do not exceed a certain time limit.
+	To traverse the paths we will take a depth-first approach.
+	In this first version our program will avoid checking if it has already been to a certain city (and if so, not go there again).
+	The time limit is there to avoid us getting stuck in an infinite loop.
+	Since all connections in our graph are bidirectional a lot of paths will just loop between two points forever (until they break the time limit).
+	Keep in mind however, if the time limit is too restricted it is not certain we will find anything at all.
+	But if we find just one path that takes us to our destination we will certainly have found the fastest one once we have gone through all of them.
+	This is the first version of the function I wrote to find the fastest path between two paths:
+	\begin{minted}[tabsize=4]{c}
+int find_fastest_path_v1(city_t *src, city_t *dst, int limit)
+{
+	if (src == NULL || dst == NULL) return -1;
+	if (src == dst) return 0;
+
+	int result = -1;
+
+	for (size_t i = 0; i < src->destination_count; i++)
+	{
+		destination_t nxt = src->destinations[i];
+
+		if (nxt.minutes <= limit)
+		{
+			int candidate = find_fastest_path_v1(
+				citymap_get(nxt.name), dst, limit - nxt.minutes
+			);
+			if (candidate >= 0)
+			{
+				candidate += nxt.minutes;
+				if (result < 0 || candidate < result)
+				{
+					result = candidate;
+				}
+			}
+		}
+	}
+
+	return result;
+}
+	\end{minted}
+	If found under the time limit, the function will return the fastest time it takes to travel via train between two cities, otherwise it will return -1.
+	\captionof{table}{Version 1}
+	\begin{adjustbox}{center}
+		\begin{tabular}{|l|l|c|c|r|}
+			\hline
+			\textbf{From} & \textbf{To} & \textbf{Limit (min)} & \textbf{Travel Time (min)} & \textbf{Find Time (ms)} \\
+			\hline
+			       Malmö &  Göteborg & 300 & 153 &     1.4 \\
+			    Göteborg & Stockholm & 300 & 211 &     1.1 \\
+			       Malmö & Stockholm & 300 & 273 &     1.3 \\
+			   Stockholm & Sundsvall & 350 & 327 &     4.7 \\
+			   Stockholm &      Umeå & 550 & 517 &  9422.6 \\
+			    Göteborg & Sundsvall & 550 & 515 & 15086.9 \\
+			   Sundsvall &      Umeå & 300 & 190 &     0.0 \\
+			        Umeå &  Göteborg & 800 & 705 &     3.1 \\
+			    Göteborg &      Umeå & 550 &  -  & 15078.7 \\
+			\hline
+		\end{tabular}
+	\end{adjustbox}
+	\par
+	In the table you can see that the brute force method managed to find the fastest travel time for the given test examples,
+	with the exception of the last row.
+	I could have of course increased the time limit for that particular case, but I did not want to wait too long.
+	What is interesting is that it managed to find the fastest path between Umeå to Göteborg in a reasonable amount of time,
+	but the other way around it is a whole nother story.
+	This is caused by Göteborg branching of much further out into other parts of the network in a shorter period of time compared to Umeå.
+	Therefore, from Göteborg there is a lot more early cases that need to be checked which then branch of further and further,
+	whilst from Umeå there is a lot less.
+
+\section{Optimizations}
+	Our previous implementation is in dire need of optimization.
+	Right now there is no restriction on our program to not visit the same place twice, so let us fix that by keeping track of where we have been.
+	What I ended up doing was using a stack to represent the path our algorithm has taken thus far.
+	Whenever we enter a new city we push it to the stack, then whenever we traverse back we pop it.
+	Before entering any city we first make sure that it is not already in our path (if so we avoid it).
+	\begin{minted}[tabsize=4]{c}
+int find_fastest_path_v2(city_t *src, city_t *dst, int limit)
+{
+	...
+	path_push(src->name);
+	for (size_t i = 0; i < src->destination_count; i++)
+	{
+		...
+		if (!path_contains(nxt.name) && nxt.minutes <= limit)
+		{
+			...
+		}
+	}
+	path_pop();
+	return result;
+}
+	\end{minted}
+	We can also combine this with iteratively incrementing the limit (version 3).
+	By doing so we avoid specifying a much too large limit value which can potentially waste a bunch of time.
+	\captionof{table}{Version 2 vs Version 3 (Malmö to Kiruna)}
+	\begin{adjustbox}{center}
+		\begin{tabular}{|c|c|r|}
+			\hline
+			\textbf{Version} & \textbf{Travel Time (min)} & \textbf{Find Time (ms)} \\
+			\hline
+			2 & 1162 & 2011.8 \\
+			3 & 1162 &  867.5 \\
+			\hline
+		\end{tabular}
+	\end{adjustbox}
+
+	In the table we see that iteratively incrementing the limit does indeed seem to benefit performance.
+
+\section{Future Improvements}
+	Our solution has improved a bit, but it is nowhere near perfect.
+	The main problem is that our program is not very smart when choosing where to go next,
+	it goes wherever it has not been no matter if it is good decision or not.
+	Anyhow, here are some measurements for the time it might take to travel from Malmö to a few different cities around Sweden:
+	\captionof{table}{From Malmö to ...}
+	\begin{adjustbox}{center}
+		\begin{tabular}{|l|c|r|}
+			\hline
+			\textbf{To} & \textbf{Travel Time (min)} & \textbf{Find Time (ms)} \\
+			\hline
+			 Göteborg &  153 &   0.01 \\
+			Stockholm &  273 &   0.06 \\
+			  Uppsala &  324 &   0.09 \\
+			    Gävle &  383 &   0.22 \\
+			Sundsvall &  600 &   4.84 \\
+			Östersund &  612 &   9.07 \\
+			     Umeå &  790 &  49.26 \\
+			    Boden &  976 & 270.20 \\
+			    Luleå & 1002 & 364.30 \\
+			Gällivare & 1095 & 495.94 \\
+			   Kiruna & 1162 & 854.33 \\
+			\hline
+		\end{tabular}
+	\end{adjustbox}
+
+\section{Source Code}
+	If anyone is interested, the source code for this project can be found over at:
+	\url{https://github.com/neogulgul/ID1021/tree/main/graph}
+
+\end{document}
